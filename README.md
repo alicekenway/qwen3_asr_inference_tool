@@ -150,7 +150,7 @@ The pipeline creates these paths under `--output-dir`:
 - `sbatch_submit_logs/`: stdout/stderr from the local `sbatch --wait` submit processes.
 - `worker_outputs/*.labels.jsonl`: Raw worker ASR transcripts.
 - `errors.jsonl`: Records that failed during preparation, such as missing audio paths or invalid candidate counts.
-- `result.json`: Final scored result unless changed by `--result-name`.
+- `result.json`: Final scored result unless changed by `--result-name`. This file is pretty-printed JSON for readability.
 
 ## Worker direct run
 

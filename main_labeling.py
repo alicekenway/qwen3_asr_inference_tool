@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import shlex
 import subprocess
@@ -544,7 +545,10 @@ def collect_results(args: argparse.Namespace, output_dir: Path) -> Path:
         )
 
     ensure_dir(result_path.parent)
-    result_path.write_text(json_dumps({"results": results, "missing_labels": missing}) + "\n", encoding="utf-8")
+    result_path.write_text(
+        json.dumps({"results": results, "missing_labels": missing}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     log_main(f"wrote {result_path} groups={len(results)} missing_labels={missing}")
     return result_path
 
