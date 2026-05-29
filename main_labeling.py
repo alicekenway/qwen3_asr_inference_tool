@@ -20,6 +20,7 @@ import os
 import shlex
 import subprocess
 import sys
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
@@ -63,6 +64,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--sample-rate", "--sample_rate", type=int, default=16000)
     parser.add_argument("--gap-ms", "--gap_ms", type=float, default=0.0, help="Optional silence inserted between concatenated clips.")
+    parser.add_argument("--max-audio-workers", "--max_audio_workers", type=int, default=8, help="Maximum threads used for audio concatenation during preparation. Use 1 for serial preparation.")
     parser.add_argument("--text-separator", "--text_separator", default=" ")
     parser.add_argument("--id-key", "--id_key", default="id")
     parser.add_argument("--output-key", "--output_key", default="output")
@@ -126,11 +128,86 @@ def candidate_count_for_outputs(outputs: Sequence[Dict[str, Any]], candidate_key
     return first
 
 
+def prepare_one_record(
+    source_json: Path,
+    record: Dict[str, Any],
+    record_index: int,
+    args: argparse.Namespace,
+    audio_root: Optional[Path],
+    prepared_dir: Path,
+) -> Dict[str, Any]:
+    raw_id = record.get(args.id_key, f"record_{record_index:09d}")
+    record_id = str(raw_id)
+    try:
+        outputs = record.get(args.output_key)
+        if not isinstance(outputs, list) or not outputs:
+            raise ValueError(f"{args.output_key} must be a non-empty list")
+        for idx, item in enumerate(outputs):
+            if not isinstance(item, dict):
+                raise ValueError(f"{args.output_key}[{idx}] must be an object")
+
+        n_candidates = candidate_count_for_outputs(outputs, args.candidate_key)
+        texts = [str(item.get(args.text_key, "") or "").strip() for item in outputs]
+        reference_text = args.text_separator.join(text for text in texts if text)
+        if not reference_text:
+            raise ValueError("concatenated reference text is empty")
+
+        safe_record = safe_name(record_id)
+        group_candidates = []
+        for candidate_index in range(n_candidates):
+            raw_audio_paths = [str(item[args.candidate_key][candidate_index]) for item in outputs]
+            audio_paths = [resolve_audio_path(path, source_json, audio_root) for path in raw_audio_paths]
+            concat_path = prepared_dir / safe_record / f"candidate_{candidate_index:03d}.wav"
+            if args.overwrite_audio or not concat_path.exists():
+                concat_audio_files(audio_paths, concat_path, target_sr=args.sample_rate, gap_ms=args.gap_ms)
+
+            group_candidates.append(
+                {
+                    "id": record_id,
+                    "candidate_index": candidate_index,
+                    "candidate": str(candidate_index),
+                    "audio": str(concat_path.resolve()),
+                    "text": reference_text,
+                    "source_json": str(source_json),
+                    "num_segments": len(outputs),
+                }
+            )
+
+        return {
+            "ok": True,
+            "group": {
+                "id": record_id,
+                "text": reference_text,
+                "candidate_count": n_candidates,
+                "candidates": [
+                    {
+                        "candidate_index": item["candidate_index"],
+                        "candidate": item["candidate"],
+                        "audio": item["audio"],
+                    }
+                    for item in group_candidates
+                ],
+            },
+            "candidates": group_candidates,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": {
+                "id": record_id,
+                "source_json": str(source_json),
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        }
+
+
 def prepare_manifests(args: argparse.Namespace, output_dir: Path) -> Tuple[int, int, int]:
     audio_root = Path(args.audio_root).expanduser().resolve() if args.audio_root else None
     input_paths = expand_input_paths(args.input_json)
     if not input_paths:
         raise ValueError("No input JSON files found")
+    if args.max_audio_workers <= 0:
+        raise ValueError("--max-audio-workers must be positive")
 
     prepared_dir = ensure_dir(output_dir / "prepared_audio")
     manifest_dir = ensure_dir(output_dir / "manifests")
@@ -143,72 +220,34 @@ def prepare_manifests(args: argparse.Namespace, output_dir: Path) -> Tuple[int, 
     error_count = 0
 
     with all_candidates_path.open("w", encoding="utf-8") as all_f, groups_path.open("w", encoding="utf-8") as groups_f, errors_path.open("w", encoding="utf-8") as err_f:
-        for source_json, record in iter_source_records(input_paths):
-            raw_id = record.get(args.id_key, f"record_{record_count:09d}")
-            record_id = str(raw_id)
-            try:
-                outputs = record.get(args.output_key)
-                if not isinstance(outputs, list) or not outputs:
-                    raise ValueError(f"{args.output_key} must be a non-empty list")
-                for idx, item in enumerate(outputs):
-                    if not isinstance(item, dict):
-                        raise ValueError(f"{args.output_key}[{idx}] must be an object")
-
-                n_candidates = candidate_count_for_outputs(outputs, args.candidate_key)
-                texts = [str(item.get(args.text_key, "") or "").strip() for item in outputs]
-                reference_text = args.text_separator.join(text for text in texts if text)
-                if not reference_text:
-                    raise ValueError("concatenated reference text is empty")
-
-                safe_record = safe_name(record_id)
-                group_candidates = []
-                for candidate_index in range(n_candidates):
-                    raw_audio_paths = [str(item[args.candidate_key][candidate_index]) for item in outputs]
-                    audio_paths = [resolve_audio_path(path, source_json, audio_root) for path in raw_audio_paths]
-                    concat_path = prepared_dir / safe_record / f"candidate_{candidate_index:03d}.wav"
-                    if args.overwrite_audio or not concat_path.exists():
-                        concat_audio_files(audio_paths, concat_path, target_sr=args.sample_rate, gap_ms=args.gap_ms)
-
-                    candidate_record = {
-                        "id": record_id,
-                        "candidate_index": candidate_index,
-                        "candidate": str(candidate_index),
-                        "audio": str(concat_path.resolve()),
-                        "text": reference_text,
-                        "source_json": str(source_json),
-                        "num_segments": len(outputs),
-                    }
-                    append_jsonl_record(all_f, candidate_record)
-                    group_candidates.append(candidate_record)
-                    candidate_count += 1
-
-                append_jsonl_record(
-                    groups_f,
-                    {
-                        "id": record_id,
-                        "text": reference_text,
-                        "candidate_count": n_candidates,
-                        "candidates": [
-                            {
-                                "candidate_index": item["candidate_index"],
-                                "candidate": item["candidate"],
-                                "audio": item["audio"],
-                            }
-                            for item in group_candidates
-                        ],
-                    },
-                )
-                record_count += 1
-            except Exception as exc:
+        def write_prepared_result(result: Dict[str, Any]) -> None:
+            nonlocal record_count, candidate_count, error_count
+            if not result["ok"]:
                 error_count += 1
-                append_jsonl_record(
-                    err_f,
-                    {
-                        "id": record_id,
-                        "source_json": str(source_json),
-                        "error": f"{type(exc).__name__}: {exc}",
-                    },
-                )
+                append_jsonl_record(err_f, result["error"])
+                return
+
+            for candidate_record in result["candidates"]:
+                append_jsonl_record(all_f, candidate_record)
+                candidate_count += 1
+            append_jsonl_record(groups_f, result["group"])
+            record_count += 1
+
+        max_workers = max(1, args.max_audio_workers)
+        max_pending = max_workers * 4
+        pending = set()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for record_index, (source_json, record) in enumerate(iter_source_records(input_paths)):
+                pending.add(executor.submit(prepare_one_record, source_json, record, record_index, args, audio_root, prepared_dir))
+                if len(pending) >= max_pending:
+                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        write_prepared_result(future.result())
+
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    write_prepared_result(future.result())
 
     shard_count = write_shards(all_candidates_path, manifest_dir, max(1, min(args.num_gpus, candidate_count)))
     print(
@@ -432,4 +471,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
