@@ -38,6 +38,7 @@ python qwen3_asr_inference_tool/main_labeling.py \
   --model Qwen/Qwen3-ASR-1.7B \
   --batch-size 8 \
   --max-new-tokens 1024 \
+  --max-audio-workers 10 \
   --gpu-memory-utilization 0.70
 ```
 
