@@ -35,6 +35,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.70)
     parser.add_argument("--max-model-len", type=int, default=None)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument(
+        "--vllm-attention-backend",
+        default="FLASH_ATTN",
+        help="Set VLLM_ATTENTION_BACKEND before importing vLLM. Use 'auto' to leave it unset.",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Ignore existing successful records in --output.")
     return parser.parse_args()
 
@@ -65,6 +70,9 @@ def _model_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def build_model(args: argparse.Namespace) -> Any:
+    if args.backend == "vllm" and args.vllm_attention_backend.lower() != "auto":
+        os.environ["VLLM_ATTENTION_BACKEND"] = args.vllm_attention_backend
+
     from qwen_asr import Qwen3ASRModel
 
     if args.backend == "vllm":

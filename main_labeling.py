@@ -63,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-memory-utilization", "--gpu_memory_utilization", type=float, default=0.70)
     parser.add_argument("--max-model-len", "--max_model_len", type=int, default=None)
     parser.add_argument("--tensor-parallel-size", "--tensor_parallel_size", type=int, default=1)
+    parser.add_argument("--vllm-attention-backend", "--vllm_attention_backend", default="FLASH_ATTN", help="Set VLLM_ATTENTION_BACKEND in workers before vLLM import. Use 'auto' to leave it unset.")
 
     parser.add_argument("--sample-rate", "--sample_rate", type=int, default=16000)
     parser.add_argument("--gap-ms", "--gap_ms", type=float, default=0.0, help="Optional silence inserted between concatenated clips.")
@@ -338,6 +339,8 @@ def worker_command(args: argparse.Namespace, worker_path: Path, shard_path: Path
         str(args.gpu_memory_utilization),
         "--tensor-parallel-size",
         str(args.tensor_parallel_size),
+        "--vllm-attention-backend",
+        args.vllm_attention_backend,
     ]
     if args.language:
         cmd.extend(["--language", args.language])

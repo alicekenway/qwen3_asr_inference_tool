@@ -41,6 +41,7 @@ python qwen3_asr_inference_tool/main_labeling.py \
   --max-new-tokens 1024 \
   --max-audio-workers 10 \
   --progress-interval 100 \
+  --vllm-attention-backend FLASH_ATTN \
   --gpu-memory-utilization 0.70
 ```
 
@@ -94,6 +95,7 @@ Qwen3-ASR/vLLM arguments passed to workers:
 - `--gpu-memory-utilization`: vLLM GPU memory utilization target. Increase to use more VRAM; decrease if jobs fail from memory pressure.
 - `--max-model-len`: Optional vLLM maximum model length. Leave unset unless your environment/model requires explicitly limiting context length.
 - `--tensor-parallel-size`: Tensor parallel size passed to the worker. For the intended one-GPU-per-worker setup, keep this as `1`.
+- `--vllm-attention-backend`: Sets `VLLM_ATTENTION_BACKEND` inside each worker before vLLM is imported. Default is `FLASH_ATTN`, which avoids broken FlashInfer installations. Use `auto` to leave vLLM's default backend selection unchanged.
 
 Audio preparation arguments:
 
@@ -150,6 +152,7 @@ CUDA_VISIBLE_DEVICES=0 python qwen3_asr_inference_tool/worker_qwen3_asr_vllm.py 
   --output /path/to/labeling_output/worker_outputs/shard_00000.labels.jsonl \
   --model Qwen/Qwen3-ASR-1.7B \
   --backend vllm \
+  --vllm-attention-backend FLASH_ATTN \
   --batch-size 8
 ```
 
@@ -171,6 +174,7 @@ Worker model/inference arguments:
 - `--gpu-memory-utilization`: vLLM GPU memory utilization target.
 - `--max-model-len`: Optional vLLM maximum model length.
 - `--tensor-parallel-size`: Tensor parallel size. Keep this at `1` for one GPU per worker.
+- `--vllm-attention-backend`: Sets `VLLM_ATTENTION_BACKEND` before importing vLLM. Default is `FLASH_ATTN`; use `auto` to leave it unset.
 - `--overwrite`: Ignore existing successful records in the worker output and rewrite the file from scratch.
 
 ## Output
