@@ -20,6 +20,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
@@ -66,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-rate", "--sample_rate", type=int, default=16000)
     parser.add_argument("--gap-ms", "--gap_ms", type=float, default=0.0, help="Optional silence inserted between concatenated clips.")
     parser.add_argument("--max-audio-workers", "--max_audio_workers", type=int, default=8, help="Maximum threads used for audio concatenation during preparation. Use 1 for serial preparation.")
+    parser.add_argument("--progress-interval", "--progress_interval", type=int, default=100, help="Print preparation progress after this many completed records. Use 0 to disable periodic progress logs.")
     parser.add_argument("--text-separator", "--text_separator", default=" ")
     parser.add_argument("--id-key", "--id_key", default="id")
     parser.add_argument("--output-key", "--output_key", default="output")
@@ -127,6 +129,11 @@ def candidate_count_for_outputs(outputs: Sequence[Dict[str, Any]], candidate_key
         if count != first:
             raise ValueError(f"candidate count mismatch: output[0] has {first}, output[{idx}] has {count}")
     return first
+
+
+def log_main(message: str) -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] [main] {message}", flush=True)
 
 
 def prepare_one_record(
@@ -209,6 +216,8 @@ def prepare_manifests(args: argparse.Namespace, output_dir: Path) -> Tuple[int, 
         raise ValueError("No input JSON files found")
     if args.max_audio_workers <= 0:
         raise ValueError("--max-audio-workers must be positive")
+    if args.progress_interval < 0:
+        raise ValueError("--progress-interval must be >= 0")
 
     prepared_dir = ensure_dir(output_dir / "prepared_audio")
     manifest_dir = ensure_dir(output_dir / "manifests")
@@ -219,13 +228,42 @@ def prepare_manifests(args: argparse.Namespace, output_dir: Path) -> Tuple[int, 
     record_count = 0
     candidate_count = 0
     error_count = 0
+    submitted_count = 0
+    completed_count = 0
+    start_time = time.time()
+    last_log_completed = 0
+
+    def maybe_log_progress(force: bool = False) -> None:
+        nonlocal last_log_completed
+        if not force and args.progress_interval == 0:
+            return
+        if not force and completed_count - last_log_completed < args.progress_interval:
+            return
+        elapsed = max(0.001, time.time() - start_time)
+        rate = completed_count / elapsed
+        log_main(
+            "prepare progress "
+            f"submitted={submitted_count} completed={completed_count} "
+            f"ok={record_count} errors={error_count} candidates={candidate_count} "
+            f"pending={submitted_count - completed_count} "
+            f"elapsed_sec={elapsed:.1f} records_per_sec={rate:.2f}"
+        )
+        last_log_completed = completed_count
+
+    log_main(
+        "prepare start "
+        f"input_files={len(input_paths)} output_dir={output_dir} "
+        f"audio_workers={args.max_audio_workers} sample_rate={args.sample_rate}"
+    )
 
     with all_candidates_path.open("w", encoding="utf-8") as all_f, groups_path.open("w", encoding="utf-8") as groups_f, errors_path.open("w", encoding="utf-8") as err_f:
         def write_prepared_result(result: Dict[str, Any]) -> None:
-            nonlocal record_count, candidate_count, error_count
+            nonlocal completed_count, record_count, candidate_count, error_count
+            completed_count += 1
             if not result["ok"]:
                 error_count += 1
                 append_jsonl_record(err_f, result["error"])
+                maybe_log_progress()
                 return
 
             for candidate_record in result["candidates"]:
@@ -233,12 +271,14 @@ def prepare_manifests(args: argparse.Namespace, output_dir: Path) -> Tuple[int, 
                 candidate_count += 1
             append_jsonl_record(groups_f, result["group"])
             record_count += 1
+            maybe_log_progress()
 
         max_workers = max(1, args.max_audio_workers)
         max_pending = max_workers * 4
         pending = set()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for record_index, (source_json, record) in enumerate(iter_source_records(input_paths)):
+                submitted_count += 1
                 pending.add(executor.submit(prepare_one_record, source_json, record, record_index, args, audio_root, prepared_dir))
                 if len(pending) >= max_pending:
                     done, pending = wait(pending, return_when=FIRST_COMPLETED)
@@ -250,9 +290,10 @@ def prepare_manifests(args: argparse.Namespace, output_dir: Path) -> Tuple[int, 
                 for future in done:
                     write_prepared_result(future.result())
 
+    maybe_log_progress(force=True)
     shard_count = write_shards(all_candidates_path, manifest_dir, max(1, min(args.num_gpus, candidate_count)))
-    print(
-        f"[main] prepared records={record_count} candidates={candidate_count} "
+    log_main(
+        f"prepare done records={record_count} candidates={candidate_count} "
         f"errors={error_count} shards={shard_count} output_dir={output_dir}"
     )
     return record_count, candidate_count, shard_count
@@ -352,7 +393,7 @@ def submit_jobs(args: argparse.Namespace, output_dir: Path) -> None:
     jobs = write_job_scripts(args, output_dir)
     if not jobs:
         raise ValueError("No shard job scripts found")
-    print(f"[main] submitting {len(jobs)} Slurm jobs")
+    log_main(f"submitting slurm_jobs={len(jobs)}")
 
     submit_log_dir = ensure_dir(output_dir / "sbatch_submit_logs")
     sbatch_prefix = shlex.split(args.sbatch_cmd)
@@ -360,8 +401,9 @@ def submit_jobs(args: argparse.Namespace, output_dir: Path) -> None:
     for shard_id, script_path, _ in jobs:
         cmd = sbatch_prefix + [str(script_path)]
         if args.dry_run:
-            print("[dry-run] " + " ".join(shlex.quote(part) for part in cmd))
+            log_main("[dry-run] " + " ".join(shlex.quote(part) for part in cmd))
             continue
+        log_main(f"submit shard={shard_id:05d} script={script_path}")
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         processes.append((shard_id, cmd, proc))
 
@@ -372,6 +414,8 @@ def submit_jobs(args: argparse.Namespace, output_dir: Path) -> None:
         (submit_log_dir / f"shard_{shard_id:05d}.stderr").write_text(stderr or "", encoding="utf-8")
         if proc.returncode != 0:
             failed.append((shard_id, proc.returncode, cmd))
+        else:
+            log_main(f"slurm job done shard={shard_id:05d}")
 
     if failed:
         for shard_id, returncode, cmd in failed:
@@ -448,7 +492,7 @@ def collect_results(args: argparse.Namespace, output_dir: Path) -> Path:
 
     ensure_dir(result_path.parent)
     result_path.write_text(json_dumps({"results": results, "missing_labels": missing}) + "\n", encoding="utf-8")
-    print(f"[main] wrote {result_path} groups={len(results)} missing_labels={missing}")
+    log_main(f"wrote {result_path} groups={len(results)} missing_labels={missing}")
     return result_path
 
 
@@ -457,6 +501,7 @@ def main() -> int:
     if args.num_gpus <= 0:
         raise ValueError("--num-gpus must be positive")
     output_dir = ensure_dir(Path(args.output_dir).expanduser().resolve())
+    log_main(f"start output_dir={output_dir} num_gpus={args.num_gpus} backend={args.backend}")
 
     if not args.collect_only:
         _, candidate_count, _ = prepare_manifests(args, output_dir)

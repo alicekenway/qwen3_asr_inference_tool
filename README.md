@@ -40,6 +40,7 @@ python qwen3_asr_inference_tool/main_labeling.py \
   --batch-size 8 \
   --max-new-tokens 1024 \
   --max-audio-workers 10 \
+  --progress-interval 100 \
   --gpu-memory-utilization 0.70
 ```
 
@@ -99,6 +100,7 @@ Audio preparation arguments:
 - `--sample-rate`: Output sample rate for prepared candidate WAVs. Default is `16000`, which matches the requested 16 kHz labeling audio.
 - `--gap-ms`: Optional silence inserted between concatenated utterances. Default is `0.0`. Use a small value like `200` if adjacent clips need separation for ASR stability.
 - `--max-audio-workers`: Maximum number of threads used by the main program while preparing concatenated candidate audio. Default is `8`. Increase this when audio preparation is I/O-bound and storage can handle more parallel reads/writes; decrease it if the filesystem is overloaded or CPU resampling becomes the bottleneck.
+- `--progress-interval`: Print main-program preparation progress after this many completed records. Default is `100`. Use `1` for very detailed logs or `0` to disable periodic progress logs.
 - `--text-separator`: String used when concatenating the segment texts into the reference text. Default is a single space.
 
 Input schema arguments:
