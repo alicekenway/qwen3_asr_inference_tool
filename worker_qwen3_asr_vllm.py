@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -177,7 +178,12 @@ def main() -> int:
 
     mode = "w" if args.overwrite else "a"
     with output_path.open(mode, encoding="utf-8") as fout:
-        for batch in tqdm(list(batched(todo, args.batch_size)), desc=f"label {manifest_path.name}"):
+        for batch in tqdm(
+            list(batched(todo, args.batch_size)),
+            desc=f"label {manifest_path.name}",
+            file=sys.stdout,
+            dynamic_ncols=True,
+        ):
             audios = [str(item["audio"]) for item in batch]
             try:
                 results = transcribe_batch(model, audios, args)
