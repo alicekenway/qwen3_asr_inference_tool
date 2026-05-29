@@ -42,6 +42,7 @@ python qwen3_asr_inference_tool/main_labeling.py \
   --max-audio-workers 10 \
   --progress-interval 100 \
   --vllm-attention-backend FLASH_ATTN \
+  --flashinfer-disable-version-check 1 \
   --gpu-memory-utilization 0.70
 ```
 
@@ -96,6 +97,7 @@ Qwen3-ASR/vLLM arguments passed to workers:
 - `--max-model-len`: Optional vLLM maximum model length. Leave unset unless your environment/model requires explicitly limiting context length.
 - `--tensor-parallel-size`: Tensor parallel size passed to the worker. For the intended one-GPU-per-worker setup, keep this as `1`.
 - `--vllm-attention-backend`: Sets `VLLM_ATTENTION_BACKEND` inside each worker before vLLM is imported. Default is `FLASH_ATTN`, which avoids broken FlashInfer installations. Use `auto` to leave vLLM's default backend selection unchanged.
+- `--flashinfer-disable-version-check`: Sets `FLASHINFER_DISABLE_VERSION_CHECK` inside each worker before vLLM is imported. Default is `1`, which bypasses startup failures when `flashinfer` and `flashinfer-cubin` versions are mismatched. Set to `0` only after those packages are correctly aligned.
 
 Audio preparation arguments:
 
@@ -161,6 +163,7 @@ CUDA_VISIBLE_DEVICES=0 python qwen3_asr_inference_tool/worker_qwen3_asr_vllm.py 
   --model Qwen/Qwen3-ASR-1.7B \
   --backend vllm \
   --vllm-attention-backend FLASH_ATTN \
+  --flashinfer-disable-version-check 1 \
   --batch-size 8
 ```
 
@@ -183,7 +186,21 @@ Worker model/inference arguments:
 - `--max-model-len`: Optional vLLM maximum model length.
 - `--tensor-parallel-size`: Tensor parallel size. Keep this at `1` for one GPU per worker.
 - `--vllm-attention-backend`: Sets `VLLM_ATTENTION_BACKEND` before importing vLLM. Default is `FLASH_ATTN`; use `auto` to leave it unset.
+- `--flashinfer-disable-version-check`: Sets `FLASHINFER_DISABLE_VERSION_CHECK` before importing vLLM. Default is `1`.
 - `--overwrite`: Ignore existing successful records in the worker output and rewrite the file from scratch.
+
+## FlashInfer mismatch note
+
+If logs show an error like:
+
+```text
+flashinfer-cubin version (...) does not match flashinfer version (...)
+```
+
+there are two ways to handle it:
+
+- Recommended environment fix: reinstall `flashinfer` and `flashinfer-cubin` so their versions match.
+- Tool workaround: keep the default `--flashinfer-disable-version-check 1`. This is useful because vLLM may import `flashinfer.comm` during compile setup even when `--vllm-attention-backend FLASH_ATTN` is used.
 
 ## Output
 

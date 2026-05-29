@@ -64,6 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-model-len", "--max_model_len", type=int, default=None)
     parser.add_argument("--tensor-parallel-size", "--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--vllm-attention-backend", "--vllm_attention_backend", default="FLASH_ATTN", help="Set VLLM_ATTENTION_BACKEND in workers before vLLM import. Use 'auto' to leave it unset.")
+    parser.add_argument("--flashinfer-disable-version-check", "--flashinfer_disable_version_check", choices=("0", "1"), default="1", help="Set FLASHINFER_DISABLE_VERSION_CHECK in workers before vLLM import. Default 1 avoids startup failures from mismatched flashinfer packages.")
 
     parser.add_argument("--sample-rate", "--sample_rate", type=int, default=16000)
     parser.add_argument("--gap-ms", "--gap_ms", type=float, default=0.0, help="Optional silence inserted between concatenated clips.")
@@ -357,6 +358,8 @@ def worker_command(args: argparse.Namespace, worker_path: Path, shard_path: Path
         str(args.tensor_parallel_size),
         "--vllm-attention-backend",
         args.vllm_attention_backend,
+        "--flashinfer-disable-version-check",
+        args.flashinfer_disable_version_check,
     ]
     if args.language:
         cmd.extend(["--language", args.language])

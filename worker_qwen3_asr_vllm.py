@@ -40,6 +40,15 @@ def parse_args() -> argparse.Namespace:
         default="FLASH_ATTN",
         help="Set VLLM_ATTENTION_BACKEND before importing vLLM. Use 'auto' to leave it unset.",
     )
+    parser.add_argument(
+        "--flashinfer-disable-version-check",
+        choices=("0", "1"),
+        default="1",
+        help=(
+            "Set FLASHINFER_DISABLE_VERSION_CHECK before importing vLLM. "
+            "Default 1 avoids vLLM startup failures caused by mismatched flashinfer/flashinfer-cubin packages."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true", help="Ignore existing successful records in --output.")
     return parser.parse_args()
 
@@ -72,6 +81,8 @@ def _model_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
 def build_model(args: argparse.Namespace) -> Any:
     if args.backend == "vllm" and args.vllm_attention_backend.lower() != "auto":
         os.environ["VLLM_ATTENTION_BACKEND"] = args.vllm_attention_backend
+    if args.backend == "vllm":
+        os.environ["FLASHINFER_DISABLE_VERSION_CHECK"] = args.flashinfer_disable_version_check
 
     from qwen_asr import Qwen3ASRModel
 
