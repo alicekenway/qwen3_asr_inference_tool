@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", required=True, help="Input JSONL manifest for this worker shard.")
     parser.add_argument("--output", required=True, help="Output JSONL labels for this worker shard.")
     parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B")
+    parser.add_argument("--backend", choices=("vllm", "transformers"), default="vllm")
     parser.add_argument("--language", default=None)
     parser.add_argument("--context", default="")
     parser.add_argument("--batch-size", type=int, default=8)
@@ -66,26 +67,22 @@ def _model_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
 def build_model(args: argparse.Namespace) -> Any:
     from qwen_asr import Qwen3ASRModel
 
-    base_kwargs = _model_kwargs(args)
-    attempts = [
-        ((), {"model": args.model, **base_kwargs}),
-        ((), {"model_name_or_path": args.model, **base_kwargs}),
-        ((args.model,), base_kwargs),
-        ((args.model,), {}),
-        ((), {"model": args.model}),
-        ((), {"model_name_or_path": args.model}),
-    ]
+    if args.backend == "vllm":
+        if not hasattr(Qwen3ASRModel, "LLM"):
+            raise TypeError("Installed qwen_asr.Qwen3ASRModel does not expose the vLLM LLM() factory")
+        return Qwen3ASRModel.LLM(
+            model=args.model,
+            max_inference_batch_size=args.batch_size,
+            max_new_tokens=args.max_new_tokens,
+            **_model_kwargs(args),
+        )
 
-    errors = []
-    for positional, kwargs in attempts:
-        try:
-            return Qwen3ASRModel(*positional, **kwargs)
-        except TypeError as exc:
-            errors.append(str(exc))
-
-    raise TypeError(
-        "Could not construct qwen_asr.Qwen3ASRModel with the known constructor patterns. "
-        "Last errors: " + " | ".join(errors[-3:])
+    if not hasattr(Qwen3ASRModel, "from_pretrained"):
+        raise TypeError("Installed qwen_asr.Qwen3ASRModel does not expose from_pretrained()")
+    return Qwen3ASRModel.from_pretrained(
+        args.model,
+        max_inference_batch_size=args.batch_size,
+        max_new_tokens=args.max_new_tokens,
     )
 
 
@@ -95,20 +92,21 @@ def _call_method(method: Any, audios: List[str], args: argparse.Namespace) -> An
         kwargs["language"] = args.language
     if args.context:
         kwargs["context"] = args.context
-    if args.max_new_tokens:
-        kwargs["max_new_tokens"] = args.max_new_tokens
 
     attempts = [
         (audios, kwargs),
-        (audios, {k: v for k, v in kwargs.items() if k != "max_new_tokens"}),
         (audios, {}),
     ]
+    last_error: Optional[TypeError] = None
     for audio_arg, call_kwargs in attempts:
         try:
             return method(audio_arg, **call_kwargs)
-        except TypeError:
+        except TypeError as exc:
+            last_error = exc
             continue
-    raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("ASR method call failed without an exception")
 
 
 def transcribe_batch(model: Any, audios: List[str], args: argparse.Namespace) -> List[Any]:
@@ -199,4 +197,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

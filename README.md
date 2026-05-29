@@ -36,6 +36,7 @@ python qwen3_asr_inference_tool/main_labeling.py \
   --num-gpus 8 \
   --sbatch_cmd 'sbatch --wait --partition=gpu --gres=gpu:1 --ntasks=1 --cpus-per-task=5 --mem=30GB' \
   --model Qwen/Qwen3-ASR-1.7B \
+  --backend vllm \
   --batch-size 8 \
   --max-new-tokens 1024 \
   --max-audio-workers 10 \
@@ -84,6 +85,7 @@ Path and environment arguments:
 Qwen3-ASR/vLLM arguments passed to workers:
 
 - `--model`: Model name or path passed to `qwen_asr.Qwen3ASRModel`. Default is `Qwen/Qwen3-ASR-1.7B`.
+- `--backend`: ASR backend used by the worker. Default is `vllm`, which calls `Qwen3ASRModel.LLM(...)`. Use `transformers` only when you intentionally want the non-vLLM `from_pretrained(...)` backend.
 - `--language`: Optional forced language, for example `English`, `Chinese`, or `Cantonese`. If omitted, the model wrapper can do automatic language handling.
 - `--context`: Optional prompt/domain context passed to the ASR model. This is useful when the audio contains domain-specific terms such as model names, acronyms, or product names.
 - `--batch-size`: Number of concatenated candidate WAVs processed per ASR batch inside each worker. Increase for throughput if GPU memory allows; decrease if vLLM runs out of memory.
@@ -145,6 +147,7 @@ CUDA_VISIBLE_DEVICES=0 python qwen3_asr_inference_tool/worker_qwen3_asr_vllm.py 
   --manifest /path/to/labeling_output/manifests/shard_00000.jsonl \
   --output /path/to/labeling_output/worker_outputs/shard_00000.labels.jsonl \
   --model Qwen/Qwen3-ASR-1.7B \
+  --backend vllm \
   --batch-size 8
 ```
 
@@ -158,6 +161,7 @@ Required worker arguments:
 Worker model/inference arguments:
 
 - `--model`: Model name or path passed to `qwen_asr.Qwen3ASRModel`.
+- `--backend`: `vllm` uses `Qwen3ASRModel.LLM(...)`; `transformers` uses `Qwen3ASRModel.from_pretrained(...)`.
 - `--language`: Optional forced language.
 - `--context`: Optional domain context prompt.
 - `--batch-size`: Number of audio files transcribed per batch.

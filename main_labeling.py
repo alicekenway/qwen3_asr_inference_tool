@@ -54,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-setup", "--worker_setup", default="", help="Optional shell snippet inserted before the worker command.")
 
     parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B")
+    parser.add_argument("--backend", choices=("vllm", "transformers"), default="vllm")
     parser.add_argument("--language", default=None)
     parser.add_argument("--context", default="")
     parser.add_argument("--batch-size", "--batch_size", type=int, default=8)
@@ -286,6 +287,8 @@ def worker_command(args: argparse.Namespace, worker_path: Path, shard_path: Path
         str(output_path),
         "--model",
         args.model,
+        "--backend",
+        args.backend,
         "--batch-size",
         str(args.batch_size),
         "--max-new-tokens",
