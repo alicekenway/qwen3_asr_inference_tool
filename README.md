@@ -127,6 +127,14 @@ Resume and control arguments:
 - `--dry-run`: Write Slurm scripts and print the `sbatch` commands without submitting jobs.
 - `--allow-no-wait`: Allow `--sbatch-cmd` without `--wait`. Normally not recommended because collection may run before jobs finish.
 
+Resume behavior:
+
+- If `manifests/all_candidates.jsonl`, `manifests/groups.jsonl`, and non-empty `manifests/shard_*.jsonl` already exist, the main program skips audio preparation by default.
+- Pass `--overwrite-audio` to rebuild prepared audio and manifests from the input JSON.
+- Before submitting Slurm jobs, the main program checks each shard output in `worker_outputs/*.labels.jsonl`. Complete shards are not submitted again.
+- Partially labeled shards are submitted, and the worker skips successful `(id, candidate_index)` records while retrying missing or failed records.
+- Pass `--overwrite-labels` to relabel everything from scratch.
+
 ## Output directory layout
 
 The pipeline creates these paths under `--output-dir`:

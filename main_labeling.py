@@ -300,6 +300,22 @@ def prepare_manifests(args: argparse.Namespace, output_dir: Path) -> Tuple[int, 
     return record_count, candidate_count, shard_count
 
 
+def existing_preparation_summary(output_dir: Path) -> Optional[Tuple[int, int, int]]:
+    manifest_dir = output_dir / "manifests"
+    all_candidates_path = manifest_dir / "all_candidates.jsonl"
+    groups_path = manifest_dir / "groups.jsonl"
+    shard_paths = sorted(manifest_dir.glob("shard_*.jsonl"))
+    if not all_candidates_path.exists() or not groups_path.exists() or not shard_paths:
+        return None
+
+    candidate_count = sum(1 for _ in load_jsonl(all_candidates_path))
+    record_count = sum(1 for _ in load_jsonl(groups_path))
+    shard_count = sum(1 for path in shard_paths if path.exists() and path.stat().st_size > 0)
+    if candidate_count <= 0 or record_count <= 0 or shard_count <= 0:
+        return None
+    return record_count, candidate_count, shard_count
+
+
 def write_shards(all_candidates_path: Path, manifest_dir: Path, num_shards: int) -> int:
     shard_paths = [manifest_dir / f"shard_{idx:05d}.jsonl" for idx in range(num_shards)]
     shard_files = [path.open("w", encoding="utf-8") for path in shard_paths]
@@ -353,6 +369,28 @@ def worker_command(args: argparse.Namespace, worker_path: Path, shard_path: Path
     return cmd
 
 
+def successful_label_keys(output_path: Path) -> set[Tuple[str, int]]:
+    done: set[Tuple[str, int]] = set()
+    if not output_path.exists():
+        return done
+    for item in load_jsonl(output_path):
+        if item.get("error") is None and item.get("id") is not None and item.get("candidate_index") is not None:
+            done.add((str(item["id"]), int(item["candidate_index"])))
+    return done
+
+
+def shard_label_status(shard_path: Path, output_path: Path) -> Tuple[bool, int, int]:
+    required = {
+        (str(item["id"]), int(item["candidate_index"]))
+        for item in load_jsonl(shard_path)
+    }
+    if not required:
+        return True, 0, 0
+    done = successful_label_keys(output_path)
+    matched_done = len(required.intersection(done))
+    return matched_done == len(required), len(required), matched_done
+
+
 def write_job_scripts(args: argparse.Namespace, output_dir: Path) -> List[Tuple[int, Path, Path]]:
     base_dir = Path(__file__).resolve().parent
     worker_path = base_dir / "worker_qwen3_asr_vllm.py"
@@ -365,6 +403,14 @@ def write_job_scripts(args: argparse.Namespace, output_dir: Path) -> List[Tuple[
     for shard_path in sorted(manifest_dir.glob("shard_*.jsonl")):
         shard_id = int(shard_path.stem.split("_")[-1])
         output_path = labels_dir / f"{shard_path.stem}.labels.jsonl"
+        if not args.overwrite_labels:
+            is_complete, total_labels, done_labels = shard_label_status(shard_path, output_path)
+            if is_complete:
+                log_main(f"resume skip completed shard={shard_id:05d} labels={done_labels}/{total_labels}")
+                continue
+            if done_labels:
+                log_main(f"resume partial shard={shard_id:05d} labels={done_labels}/{total_labels}; worker will process remaining")
+
         command = " ".join(shlex.quote(part) for part in worker_command(args, worker_path, shard_path, output_path))
         script_path = slurm_dir / f"{shard_path.stem}.sbatch.sh"
         setup = args.worker_setup.strip()
@@ -395,7 +441,8 @@ def submit_jobs(args: argparse.Namespace, output_dir: Path) -> None:
 
     jobs = write_job_scripts(args, output_dir)
     if not jobs:
-        raise ValueError("No shard job scripts found")
+        log_main("no slurm jobs to submit; all label shards are complete")
+        return
     log_main(f"submitting slurm_jobs={len(jobs)}")
 
     submit_log_dir = ensure_dir(output_dir / "sbatch_submit_logs")
@@ -507,7 +554,16 @@ def main() -> int:
     log_main(f"start output_dir={output_dir} num_gpus={args.num_gpus} backend={args.backend}")
 
     if not args.collect_only:
-        _, candidate_count, _ = prepare_manifests(args, output_dir)
+        existing = None if args.overwrite_audio else existing_preparation_summary(output_dir)
+        if existing is not None:
+            record_count, candidate_count, shard_count = existing
+            log_main(
+                "resume skip preparation "
+                f"records={record_count} candidates={candidate_count} shards={shard_count} "
+                f"reason=existing_manifests use --overwrite-audio to rebuild"
+            )
+        else:
+            _, candidate_count, _ = prepare_manifests(args, output_dir)
         if candidate_count == 0:
             raise RuntimeError("No valid candidate audio was prepared; inspect errors.jsonl")
         if args.prepare_only:
